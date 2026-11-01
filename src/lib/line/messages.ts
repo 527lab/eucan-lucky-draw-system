@@ -48,3 +48,19 @@ export function fallbackMessage(): LineMessage {
 
 export const askForPhotoMessage = (): LineMessage => textMessage("請傳照片喔");
 export const notAvailableYetMessage = (): LineMessage => textMessage("此功能尚未開放，敬請期待。");
+
+export function registrationUsageMessage(s: Settings): LineMessage {
+  const c = s["registration.command"];
+  return textMessage(`請輸入「${c} 員工編號」，例如「${c} A1234」。`);
+}
+export const registrationSuccessMessage = (s: Settings): LineMessage =>
+  textMessage(`✅ 已確認，歡迎參加${s["event.name"]}！輸入「說明」可查看活動規則。`, true);
+export const invalidEmployeeNoMessage = (): LineMessage =>
+  textMessage("查無此員工編號或非在職，請確認後再輸入");
+export const employeeNoTakenMessage = (): LineMessage =>
+  textMessage("此編號已報名，如有問題請聯絡福委 / HR");
+export const verifierBusyMessage = (): LineMessage => textMessage("系統忙碌，請稍後再試");
+export const alreadyRegisteredMessage = (): LineMessage =>
+  textMessage("您已完成報名，如需更換員工編號請聯絡福委 / HR");
+export const registrationBlockedMessage = (): LineMessage =>
+  textMessage("目前無法報名，請聯絡福委 / HR");

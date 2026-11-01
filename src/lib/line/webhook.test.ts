@@ -294,7 +294,7 @@ describe("LINE webhook", () => {
       expect(lastReplyText()).toBe("請傳照片喔");
       client.replies.length = 0;
       await send([ev("message", { message: { type: "image", id: "i1", contentProvider: { type: "line" } } })]);
-      expect(client.replies).toHaveLength(0);
+      expect(lastReplyText()).toContain("請先完成報名");
     });
   });
 
