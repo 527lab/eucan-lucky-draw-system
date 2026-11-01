@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# next.js
+.next/
+out/
+build/
+
+# env / secrets — 任何金鑰都不得進版控
+.env
+.env*.local
+.env.production
+.env.development
+!.env.example
+
+# misc
+.DS_Store
+*.log
+coverage/
+.vercel/
+playwright-report/
+test-results/
