@@ -30,7 +30,7 @@
 
 | 角色 | 說明 | 介面 |
 |---|---|---|
-| 參加者 | 員工（家眷是否能參加見 open-questions） | LINE 聊天室 |
+| 參加者 | **僅公司員工**（無眷屬）；名單來自請假系統，LINE 帳號需綁定員工（見 architecture.md §7） | LINE 聊天室 |
 | 管理員 | David 和指定的福委或 HR | 網頁後台 `/admin` |
 | 大螢幕 | 抽獎現場投影 | 網頁 `/admin/draw/live`（需要管理員登入） |
 
@@ -40,8 +40,9 @@
 1. 員工掃 QR code 加 OA 好友，觸發 `follow` 事件。
 2. 系統建立或恢復 `participants` 紀錄，並取得 LINE 顯示名稱和大頭貼（Get profile API）。
 3. 依 `registration.mode` 處理：
+   - `employee`（**預設**）：Bot 請使用者輸入「員工編號 + 一次性綁定碼」，與同步自請假系統的 `employees` 比對，成功就把這個 LINE 帳號綁定到該員工（一人一綁、失敗鎖定，細節見 architecture.md §7.3）。未綁定者不能上傳照片、不進獎池。
    - `none`：直接可以參加，以 LINE 顯示名稱識別。
-   - `name`（預設）：Bot 請使用者回覆「真實姓名」，收到後完成報名。
+   - `name`（備援，名單不可用時）：Bot 請使用者回覆「真實姓名」，收到後完成報名。
    - `code`：Bot 請使用者輸入活動通關碼（`registration.joinCode`），通過後再輸入姓名。這可以防止外部人士加好友來參加。
 4. 用 **reply message** 回覆歡迎訊息和使用說明（reply 不算進訊息額度）。
 
@@ -145,7 +146,7 @@
 4. 獎池人數不足時，剩下的名額標記為 `unfilled`，不會報錯。
 5. **重抽**：管理員可以把某筆結果標成 `void`（例如得獎人不在現場），再從目前剩下的獎池抽出替補。替補紀錄的 `replaces_result_id` 指向原結果。
 6. 抽獎是**伺服器端一次算完**全部結果並存入資料庫，大螢幕只負責依序「揭曉」。這樣斷線或重新整理都不會改變結果。
-7. 觸發方式：由管理員在後台手動按下（主要方式）。另外可以選擇設定 `draw.scheduledAt` 自動執行（見 architecture.md 關於 Cron 精度的說明）。
+7. 觸發方式：由管理員在後台手動按下（主要方式）。另外可以選擇設定 `draw.scheduledAt` 自動執行（由容器內排程執行，見 architecture.md §4.7）。
 
 ### 5.4 通知
 - 管理員確認結果後按「發送中獎通知」→ 逐筆 push → 寫入 `outbound_messages`（retry key、狀態、`x-line-request-id`）。
@@ -159,9 +160,10 @@
 participants
   id                uuid PK
   line_user_id      text UNIQUE NOT NULL     -- 依 provider 而不同的 LINE userId
+  employee_id       uuid UNIQUE NULL FK → employees   -- 綁定的員工（registration.mode=employee）
   display_name      text                     -- LINE 顯示名稱
   picture_url       text
-  real_name         text                     -- 報名時輸入
+  real_name         text                     -- 由 employees.name 帶入（備援模式則為報名時輸入）
   status            enum(pending_registration, active, blocked, unfollowed)
   registered_at     timestamptz
   followed_at       timestamptz
@@ -196,6 +198,26 @@ submissions
   reviewed_at       timestamptz
   created_at        timestamptz             -- 以 LINE webhook 的 timestamp 為準
   INDEX (participant_id, spot_id, status)
+
+employees                                  -- 自請假系統同步的唯讀副本（architecture.md §7）
+  id                uuid PK
+  external_id       text UNIQUE NOT NULL
+  employee_no       text UNIQUE
+  name              text NOT NULL
+  department        text
+  email             text
+  active            boolean
+  trip_eligible     boolean DEFAULT true
+  source            text
+  synced_at         timestamptz
+
+employee_bind_codes
+  id                uuid PK
+  employee_id       uuid FK → employees
+  code_hash         text NOT NULL
+  expires_at        timestamptz
+  used_at           timestamptz NULL
+  used_by_participant_id uuid NULL
 
 conversation_states
   participant_id    uuid PK FK
@@ -290,12 +312,13 @@ admin_audit_logs
 |---|---|
 | `LINE_CHANNEL_SECRET` | 驗證 webhook 簽章 |
 | `LINE_CHANNEL_ACCESS_TOKEN` | 呼叫 Messaging API（長期 token 或 v2.1 token，見 architecture.md） |
-| `DATABASE_URL` | Postgres 連線字串（pooled） |
-| `DATABASE_URL_UNPOOLED` | migration 用 |
-| `BLOB_READ_WRITE_TOKEN` | 物件儲存 |
+| `DATABASE_URL` | Postgres 連線字串（compose 內部網路） |
+| `PHOTO_STORAGE_DIR` | 照片 volume 掛載路徑（例如 `/data/photos`） |
+| `TUNNEL_TOKEN` | Cloudflare Tunnel token（給 `cloudflared` 容器，不進 app） |
+| `LEAVE_API_BASE_URL` / `LEAVE_API_TOKEN` | 請假系統整合 API（選用，`employees.source=leave-api` 時需要） |
 | `ADMIN_PASSWORD_HASH` | 管理密碼雜湊 |
 | `SESSION_SECRET` | cookie 簽章 |
-| `CRON_SECRET` | 保護排程端點（選用） |
+| `CRON_SECRET` | 保護排程端點 |
 | `APP_BASE_URL` | 產生連結用 |
 | `APP_ENV` | `development` / `test` / `production` |
 
@@ -304,7 +327,9 @@ admin_audit_logs
 |---|---|---|---|
 | `event.name` | string | `"EUCAN 2027 員工旅遊"` | 顯示用 |
 | `event.timezone` | string | `"Asia/Taipei"` | |
-| `registration.mode` | `none`\|`name`\|`code` | `name` | 3.1 |
+| `registration.mode` | `employee`\|`name`\|`code`\|`none` | `employee` | 3.1；`employee` 需有員工名單 |
+| `employees.source` | `csv`\|`leave-api` | `csv` | 員工名單來源（architecture.md §7） |
+| `employees.syncCron` | string\|null | `0 3 * * *` | 名單自動同步排程 |
 | `registration.joinCode` | string\|null | null | `code` 模式使用 |
 | `upload.startAt` | datetime\|null | null | 早於這個時間的照片不收 |
 | `upload.deadlineAt` | datetime\|null | null | 截止時間 |

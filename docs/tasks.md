@@ -1,6 +1,6 @@
 # 實作任務拆解（tasks.md）
 
-> 對象：由 Sonnet 依序實作。每個階段（S1–S8）各開一個分支、一個 PR，合併後再進行下一階段。
+> 對象：由 Sonnet 依序實作。每個階段（S1–S8，含 S3b）各開一個分支、一個 PR，合併後再進行下一階段。
 > 規格以 [spec.md](./spec.md)、[architecture.md](./architecture.md) 為準；遇到未定事項，依 [open-questions.md](./open-questions.md) 的「預設做法」，不要自行發明規則。
 
 ## 共通規則（每個階段都適用）
@@ -32,9 +32,9 @@
 
 ## S2 資料庫結構與設定模組
 **內容**
-- Drizzle schema：依 [spec.md §6](./spec.md#6-資料模型) 建立全部的表、enum、索引、partial unique index（`draw_runs`）。
+- Drizzle schema：依 [spec.md §6](./spec.md#6-資料模型) 建立全部的表（含 `employees`、`employee_bind_codes`、`participants.employee_id`）、enum、索引、partial unique index（`draw_runs`）。
 - drizzle-kit migrations；`pnpm db:migrate`、`pnpm db:seed`（建立 3 個範例景點、3 個範例獎品）。
-- `src/lib/db/client.ts`：正式環境用 Neon serverless driver，測試用 PGlite，由 env 決定。
+- `src/lib/db/client.ts`：正式環境用 `pg` driver 連 compose 內的 Postgres，測試用 PGlite，由 env 決定。
 - `src/lib/settings/`：zod schema（[spec.md §7.2](./spec.md#72-業務設定settings-表)）加上預設值；`getSettings()` 會把 DB 值合併到預設值上，`updateSetting(key, value, actor)` 會驗證並寫入稽核紀錄。抽獎鎖定時，修改 `ticket.*`、`review.mode` 會拋出錯誤。
 - 測試 helper：每個測試建立一個全新的 PGlite 並跑 migration。
 
@@ -48,20 +48,37 @@
 **內容**
 - `src/lib/line/signature.ts`：HMAC-SHA256 + Base64，使用 `crypto.timingSafeEqual`。
 - `POST /api/line/webhook`（`runtime = 'nodejs'`）：讀 raw body → 驗簽 → 寫入 `webhook_events`（ON CONFLICT DO NOTHING）→ 回 200 → 在 `after()` 中分派 handler。
-- Handlers：`follow`（建立或恢復參加者，取得 profile，回覆歡迎訊息）、`unfollow`、`message.text`（報名流程 `awaiting_name`、`awaiting_join_code`，以及關鍵字「打卡」「進度」「說明」）、`postback` 路由骨架、群組事件（`leave`）。
+- Handlers：`follow`（建立或恢復參加者，取得 profile，回覆歡迎訊息）、`unfollow`、`message.text`（報名流程 `awaiting_name`、`awaiting_join_code`；`employee` 模式的綁定由 S3b 完成，以及關鍵字「打卡」「進度」「說明」）、`postback` 路由骨架、群組事件（`leave`）。
 - `src/lib/line/messages.ts`：Quick Reply 與文字訊息 builder，範本來自設定。
 - `scripts/fake-webhook.ts`：讀取本機 env 的測試 secret，簽章後送出指定類型的事件（follow、text、image、postback）。
 
 **驗收條件**
 - [ ] 簽章錯誤時回 401，而且不寫入 DB
 - [ ] 同一個 `webhookEventId` 送兩次，只處理一次（整合測試）
-- [ ] `registration.mode` 三種模式的報名流程都有整合測試
-- [ ] 用測試 OA 實機：加好友收到歡迎訊息、輸入姓名後完成報名、輸入「說明」收到說明文字
+- [ ] `registration.mode` 的 `none`／`name`／`code` 報名流程都有整合測試（`employee` 見 S3b）
+- [ ] 用測試 OA 實機（OA 申請暫緩，之前以 fake-webhook 驗證）：加好友收到歡迎訊息、完成報名、輸入「說明」收到說明文字
 - [ ] webhook 回應時間（不含 `after()`）在本機量測 < 300ms
+
+## S3b 員工名單同步與 LINE 綁定
+> 設計見 [architecture.md §7](./architecture.md#7-與請假系統的員工名單聯動)。請假系統 API 尚未定案，本階段只做介面、CSV 與 mock 轉接器。
+
+**內容**
+- `src/lib/employees/directory.ts`：`EmployeeDirectory` 介面與 `EmployeeRecord` 型別（zod 驗證）。
+- 轉接器：`csv`（後台上傳、欄位對應）、`mock`（測試）、`leave-api`（依 §7.4 規格實作，用 mock server 測試；請假系統就緒前預設不啟用）。
+- `sync`：upsert、停用在職狀態變動者、稽核紀錄（新增／更新／停用筆數）；後台「立即同步」按鈕與容器內排程。
+- 後台：員工名單頁、匯出一次性綁定碼 CSV（只存雜湊，匯出寫稽核）、解除綁定／重發碼、手動綁定。
+- `registration.mode = employee`：follow 後請輸入「員工編號 綁定碼」；constant-time 比對、一人一綁、失敗 5 次鎖 15 分鐘、未綁定者不能上傳也不進獎池。
+
+**驗收條件**
+- [ ] CSV 匯入與 mock 轉接器的同步有整合測試（新增、更新、離職停用）
+- [ ] 錯誤的編號或碼回覆相同的通用錯誤訊息；連續失敗 5 次後鎖定
+- [ ] 同一位員工不能被兩個 LINE 帳號綁定；同一個綁定碼不能使用兩次
+- [ ] 未綁定者傳照片會收到提示且不建立 submission
+- [ ] 匯出綁定碼與解除綁定都有稽核紀錄
 
 ## S4 照片上傳流程
 **內容**
-- `src/lib/storage/`：介面加上 Vercel Blob 實作與 in-memory 實作（測試用）；key 格式 `photos/<participantId>/<uuid>.jpg`。
+- `src/lib/storage/`：介面加上本機檔案系統實作（路徑由 `PHOTO_STORAGE_DIR` 指定，Docker volume）與 in-memory 實作（測試用）；key 格式 `photos/<participantId>/<uuid>.jpg`；防止路徑穿越。
 - `message.image` handler：先下載（`MessagingApiBlobClient.getMessageContent`）再上傳 storage，接著建立 submission，依 [spec.md §3.2](./spec.md#32-上傳景點合照核心流程) 的路徑 A 和 B 處理。
 - 景點選單（Quick Reply 超過 13 個時改用 Flex carousel）、`awaiting_photo` 狀態與 TTL、`imageSet` 整組套用景點。
 - 依審核模式決定 submission 狀態；處理截止時間、景點時段、`upload.maxPerSpotPerUser`、抽獎鎖定後拒收。
@@ -120,11 +137,15 @@
 ## S8 部署、圖文選單、彩排
 **內容**
 - `scripts/rich-menu.ts`：用 API 建立圖文選單（上傳打卡照、我的進度、活動說明），上傳圖片並設為預設選單；可以指定環境。
-- Vercel 專案設定文件（`docs/runbook.md`）：env 對照表（只寫鍵名）、Neon 與 Blob 整合步驟、staging 固定網域、Deployment Protection bypass、LINE Console 設定步驟、活動當天檢查表、故障應變（人工補登、重跑失敗事件）。
-- Vercel Cron（選用）：照片保存期滿後刪除、DB keep-alive。
+- `deploy/`：`Dockerfile`（multi-stage、standalone）、`docker-compose.yml`（app、db、cloudflared、backup）、`.env.example`、每日備份腳本與還原演練。
+- GHCR 映像建置與推送的 GitHub Actions。
+- 部署文件（`docs/runbook.md`）：env 對照表（只寫鍵名）、Cloudflare Tunnel 與 Access 設定（webhook 路徑排除）、staging / production 兩套 compose、LINE Console 設定步驟、更新與回滾、活動當天檢查表（UPS、網路、備份）、故障應變（人工補登、重跑失敗事件）。
+- 容器內排程：補償掃描、員工名單同步、照片保存期滿後刪除。
 - 壓力驗證：用 `fake-webhook.ts` 對 staging 模擬 40 人 × 10 張照片。
 
 **驗收條件**
+- [ ] `docker compose up` 後 app 可透過 Cloudflare Tunnel 的固定網域存取；重開機後自動恢復
+- [ ] 備份可成功還原（演練一次）
 - [ ] staging（測試 OA）與 production（正式 OA）都可以正常收發
 - [ ] 壓力驗證：400 個 image 事件在 2 分鐘內送完，0 個失敗，submissions 筆數正確，沒有重複
 - [ ] runbook 中的活動當天檢查表經過一次完整彩排（含抽獎與通知）
