@@ -6,7 +6,7 @@ import type { LineMessage } from "../line/client";
 import { mainMenuQuickReply } from "../line/messages";
 import type { Settings } from "../settings";
 import { formatTime } from "./rules";
-import { provisionalTickets } from "./tickets-provisional";
+import { ticketsFor } from "../domain/entitlements-db";
 
 /** 「進度」Flex Message：每個景點一列（✅／⬜），加上審核中張數、券數、截止時間。 */
 export async function buildProgressMessage(
@@ -33,7 +33,7 @@ export async function buildProgressMessage(
         inArray(submissions.status, ["pending_review", "pending_spot"]),
       ),
     );
-  const tickets = await provisionalTickets(db, participantId, settings);
+  const tickets = await ticketsFor(db, settings, participantId);
   const deadline = settings["upload.deadlineAt"];
 
   const row = (s: { name: string; required: boolean; id: string }): messagingApi.FlexComponent => ({

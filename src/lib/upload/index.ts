@@ -22,7 +22,7 @@ import {
 } from "./messages";
 import { buildProgressMessage } from "./progress";
 import { checkUploadWindow, isSpotOpen } from "./rules";
-import { provisionalTickets } from "./tickets-provisional";
+import { ticketsFor } from "../domain/entitlements-db";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type MessageEvent = Extract<LineEvent, { type: "message" }>;
@@ -72,7 +72,7 @@ async function approvedOrPendingReply(
   spotName: string,
 ) {
   return status === "approved"
-    ? photoApprovedMessage(spotName, await provisionalTickets(ctx.db, participantId, settings))
+    ? photoApprovedMessage(spotName, await ticketsFor(ctx.db, settings, participantId))
     : photoPendingReviewMessage();
 }
 
