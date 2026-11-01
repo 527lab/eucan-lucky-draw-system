@@ -8,6 +8,11 @@ export default defineConfig({
     command: "pnpm dev --port 3100",
     url: "http://localhost:3100",
     reuseExistingServer: !process.env.CI,
-    env: { APP_ENV: "test" },
+    // 全部是假值：mock 登入、假 session 密鑰，不連 LINE 與真實請假系統。
+    env: {
+      APP_ENV: "test",
+      ADMIN_AUTH_SOURCE: "mock",
+      SESSION_SECRET: "e2e-fake-session-secret",
+    },
   },
 });

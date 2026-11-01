@@ -66,8 +66,11 @@ export async function runMigrations(handle: DbHandle): Promise<void> {
 
 let shared: Promise<DbHandle> | undefined;
 
-/** 應用程式共用連線（快取）。 */
+/** 應用程式共用連線（快取）。記憶體內 PGlite（僅 test）會自動執行 migration。 */
 export function getDb(): Promise<Db> {
-  shared ??= createDb();
+  shared ??= createDb().then(async (h) => {
+    if (h.driver === "pglite") await runMigrations(h);
+    return h;
+  });
   return shared.then((h) => h.db);
 }
