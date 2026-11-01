@@ -56,6 +56,9 @@ function ev(type: string, extra: Record<string, unknown>, source: unknown = { ty
 const text = (t: string, source?: unknown) =>
   ev("message", { message: { type: "text", id: `m${seq}`, text: t } }, source);
 
+const originalSpot = postbackRoutes.spot;
+const originalAssign = postbackRoutes.assign;
+
 describe("LINE webhook", () => {
   let handle: DbHandle;
   let client: Mock;
@@ -77,7 +80,9 @@ describe("LINE webhook", () => {
   });
   afterEach(async () => {
     registrationHandler.current = null;
-    for (const k of Object.keys(postbackRoutes)) delete postbackRoutes[k];
+    postbackRoutes.spot = originalSpot;
+    postbackRoutes.assign = originalAssign;
+    delete postbackRoutes.unknown;
     await handle.close();
   });
 
@@ -249,11 +254,12 @@ describe("LINE webhook", () => {
       expect(lastReplyText()).toContain("請先完成報名");
     });
 
-    it("已報名者輸入「打卡」「進度」不會被要求報名（功能待 S4/S5）", async () => {
+    it("已報名者輸入「打卡」「進度」不會被要求報名（詳細行為見 upload.test.ts）", async () => {
       await handle.db.insert(participants).values({ lineUserId: USER, status: "active" });
       await send([text("打卡")]);
-      expect(lastReplyText()).not.toContain("請先完成報名");
-      expect(lastReplyText()).toContain("尚未開放");
+      expect(lastReplyText()).toContain("沒有開放的景點");
+      await send([text("進度")]);
+      expect(client.replies.at(-1)?.messages[0]?.type).toBe("flex");
     });
 
     it("「說明」回覆後台設定的說明文字並附主選單", async () => {
@@ -289,7 +295,7 @@ describe("LINE webhook", () => {
   });
 
   describe("其他訊息類型", () => {
-    it("貼圖回「請傳照片喔」；圖片留待 S5 不回覆", async () => {
+    it("貼圖回「請傳照片喔」；未報名者傳圖片被擋", async () => {
       await send([ev("message", { message: { type: "sticker", id: "s1", packageId: "1", stickerId: "1" } })]);
       expect(lastReplyText()).toBe("請傳照片喔");
       client.replies.length = 0;
