@@ -8,6 +8,17 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-not-a-secret
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s
+          --health-timeout 5s --health-retries 10
     env:
       # ⚠️ 以下全部是 DUMMY 假值，僅供 build 通過驗證，不是真實金鑰。
       APP_ENV: production
@@ -32,4 +43,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - name: migration 於真實 Postgres 執行
+        run: pnpm db:migrate && pnpm db:seed
+        env:
+          DATABASE_URL: postgres://ci:ci-not-a-secret@localhost:5432/ci
       - run: pnpm build
