@@ -32,7 +32,7 @@
 
 ## S2 資料庫結構與設定模組
 **內容**
-- Drizzle schema：依 [spec.md §6](./spec.md#6-資料模型) 建立全部的表（含 `employees`、`employee_bind_codes`、`participants.employee_id`）、enum、索引、partial unique index（`draw_runs`）。
+- Drizzle schema：依 [spec.md §6](./spec.md#6-資料模型) 建立全部的表（含 `participants.employee_no`、`employee_allowlist`；**不建** `employees`、`employee_bind_codes`、`employee_bind_attempts`）、enum、索引、partial unique index（`draw_runs`）。
 - drizzle-kit migrations；`pnpm db:migrate`、`pnpm db:seed`（建立 3 個範例景點、3 個範例獎品）。
 - `src/lib/db/client.ts`：正式環境用 `pg` driver 連 compose 內的 Postgres，測試用 PGlite，由 env 決定。
 - `src/lib/settings/`：zod schema（[spec.md §7.2](./spec.md#72-業務設定settings-表)）加上預設值；`getSettings()` 會把 DB 值合併到預設值上，`updateSetting(key, value, actor)` 會驗證並寫入稽核紀錄。抽獎鎖定時，修改 `ticket.*`、`review.mode` 會拋出錯誤。
@@ -48,34 +48,36 @@
 **內容**
 - `src/lib/line/signature.ts`：HMAC-SHA256 + Base64，使用 `crypto.timingSafeEqual`。
 - `POST /api/line/webhook`（`runtime = 'nodejs'`）：讀 raw body → 驗簽 → 寫入 `webhook_events`（ON CONFLICT DO NOTHING）→ 回 200 → 在 `after()` 中分派 handler。
-- Handlers：`follow`（建立或恢復參加者，取得 profile，回覆歡迎訊息）、`unfollow`、`message.text`（報名流程 `awaiting_name`、`awaiting_join_code`；`employee` 模式的綁定由 S3b 完成，以及關鍵字「打卡」「進度」「說明」）、`postback` 路由骨架、群組事件（`leave`）。
+- Handlers：`follow`（建立或恢復參加者，取得 profile，回覆歡迎訊息）、`unfollow`、`message.text`（關鍵字「打卡」「進度」「說明」；報名的「指令＋員工編號」解析與查證由 S3b 完成）、`postback` 路由骨架、群組事件（`leave`）。
 - `src/lib/line/messages.ts`：Quick Reply 與文字訊息 builder，範本來自設定。
 - `scripts/fake-webhook.ts`：讀取本機 env 的測試 secret，簽章後送出指定類型的事件（follow、text、image、postback）。
 
 **驗收條件**
 - [ ] 簽章錯誤時回 401，而且不寫入 DB
 - [ ] 同一個 `webhookEventId` 送兩次，只處理一次（整合測試）
-- [ ] `registration.mode` 的 `none`／`name`／`code` 報名流程都有整合測試（`employee` 見 S3b）
+- [ ] 未報名者輸入「打卡」「進度」會被提示先報名（報名流程本身見 S3b）
 - [ ] 用測試 OA 實機（OA 申請暫緩，之前以 fake-webhook 驗證）：加好友收到歡迎訊息、完成報名、輸入「說明」收到說明文字
 - [ ] webhook 回應時間（不含 `after()`）在本機量測 < 300ms
 
 ## S3b 員工編號查證與報名
-> 設計見 [architecture.md §7](./architecture.md#7-員工身分查證與請假系統聯動)。員工只輸入員工編號，不做綁定碼、不同步名單。請假系統 API 尚未定案，本階段先做介面、CSV 與 mock 轉接器。
+> 設計見 [architecture.md §7](./architecture.md#7-員工身分查證與後台登入與請假系統聯動)。員工在 LINE 輸入「啟動指令＋員工編號」（預設 `參加 A1234`）；不做綁定碼、不同步名單、**不做冒用防護**（S0d）。請假系統 API 尚未定案，本階段先做介面、CSV 與 mock 轉接器。
 
 **內容**
-- `src/lib/employees/verifier.ts`：`EmployeeVerifier` 介面（`verify(employeeNo) → { valid }`）、編號正規化與格式檢查。
-- 轉接器：`csv`（後台上傳單欄編號清單→`employee_allowlist`）、`mock`（測試）、`leave-api`（依 [architecture.md §7.4](./architecture.md) 實作，3 秒逾時，用 mock server 測試；API 故障時**不得放行**；請假系統就緒前預設不啟用）。
-- `registration.mode = employee`：follow 後請輸入員工編號；`participants.employee_no` UNIQUE（一編號一 LINE 帳號）；失敗 `registration.maxFailures` 次鎖 `registration.lockMinutes` 分鐘；`employee_bind_attempts` 記錄（編號只存雜湊）；編號已被他人使用時回覆專用提示。未通過者不能上傳也不進獎池。
-- 後台：`/admin/employees`（`csv` 備援清單上傳）、參加者頁的「解除綁定」與「重複綁定嘗試」列表；中獎名單顯示員工編號以便現場核對。所有動作寫稽核。
+- `src/lib/employees/verifier.ts`：`EmployeeVerifier` 介面（`verify(employeeNo) → { valid }`，故障丟 `VerifierUnavailableError`）、輸入正規化（trim、全形轉半形、長度上限；**不訂格式**）。
+- `src/lib/employees/register.ts`：解析「`registration.command`＋編號」（空白可有可無、全形半形皆可）。
+- 轉接器：`csv`（後台上傳單欄編號清單→`employee_allowlist`）、`mock`（測試）、`leave-api`（依 [architecture.md §7.4](./architecture.md) (1) 實作，3 秒逾時，用 mock server 測試；API 故障時**不得放行**；請假系統就緒前預設不啟用）。
+- 報名：通過後寫入 `participants.employee_no`（UNIQUE）與 `employee_verified_at`、狀態 `active`；同帳號重複輸入同編號視為成功；編號已被其他帳號使用回專用提示；只輸入指令回用法。未通過者不能上傳也不進獎池。
+- 後台：`/admin/employees`（`csv` 備援清單上傳）；參加者「停權」時一併釋出 `employee_no`；中獎名單顯示員工編號以便現場核對。所有動作寫稽核。
 
 **驗收條件**
-- [ ] `csv` 與 `mock` 轉接器的查證有單元／整合測試（有效、無效、離職、格式不合）
+- [ ] `csv` 與 `mock` 轉接器的查證有單元／整合測試（有效、無效、離職、輸入過長／含空白）
+- [ ] 指令解析測試：`參加A1234`、`參加 A1234`、`參加　Ａ１２３４`（全形）、只有 `參加`、自訂指令
 - [ ] `leave-api` 轉接器在逾時、5xx、回應格式錯誤時都回「系統忙碌」且不放行（mock server 測試）
-- [ ] 無效編號回覆通用訊息；連續失敗 5 次後鎖定、鎖定期滿後可再試
-- [ ] 同一編號不能被兩個 LINE 帳號綁定（並發測試）；第二個帳號收到專用提示且留下 `already_bound` 紀錄
-- [ ] 管理員解除綁定後，該編號可由新的 LINE 帳號重新綁定；解除動作有稽核紀錄
+- [ ] 無效編號回覆通用訊息
+- [ ] 同一編號不能被兩個 LINE 帳號綁定（並發測試）；第二個帳號收到專用提示
+- [ ] 停權後該編號被釋出，可由其他 LINE 帳號報名
 - [ ] 未通過查證者傳照片會收到提示且不建立 submission
-- [ ] 查證 API 的請求與 log 不含完整編號以外的個資，`employee_bind_attempts` 只存雜湊
+- [ ] log 中不含編號以外的個資
 
 ## S4 照片上傳流程
 **內容**
@@ -106,21 +108,23 @@
 
 ## S6 管理後台
 **內容**
-- 登入、登出、session middleware，以及登入失敗速率限制。
-- `src/lib/auth/access-jwt.ts` 與 middleware：對 `/admin*`、`/api/admin*` 驗證 `Cf-Access-Jwt-Assertion`（`jose` + JWKS，檢查 `aud`、效期），production／staging 無效回 403；本機開發可用設定關閉；JWT 的 email 作為稽核 `actor`。
+- 登入、登出、session middleware（簽章 cookie，24 小時），以及登入失敗速率限制（同 IP 每分鐘 5 次）。
+- `src/lib/auth/admin-authenticator.ts`：`AdminAuthenticator` 介面與轉接器 `leave-api`（依 [architecture.md §7.4](./architecture.md) (2)，5 秒逾時，`ok && isManager` 才放行，故障時不放行）、`mock`（僅非 production）、選用的緊急備援密碼（`ADMIN_PASSWORD_HASH` 有設才啟用，稽核 actor 記為 `break-glass`）。**不儲存、不記錄密碼**（log 遮蔽 request body）。
 - [spec.md §4.2](./spec.md#42-頁面) 中除了抽獎以外的所有頁面：儀表板（含 LINE 額度查詢）、景點、參加者、照片審核（批次操作）、獎品、設定、訊息範本、稽核紀錄。
-- `/api/admin/photos/[id]`：驗證 session 後串流 Blob 照片，回應帶 `Cache-Control: private`。
+- `/api/admin/photos/[id]`：驗證 session 後串流照片，回應帶 `Cache-Control: private`。
 - 手動新增 submission（給系統故障時人工補登使用）。
-- 所有寫入都寫進 `admin_audit_logs`。
+- 所有寫入都寫進 `admin_audit_logs`，`actor` 為「員工編號 姓名」。
 
 **驗收條件**
 - [ ] 未登入存取任何 `/admin/**` 或 `/api/admin/**` 都會被導向登入頁或回 401（E2E 測試）
+- [ ] 請假系統驗證通過且為主管者可登入；密碼錯誤、非主管、請假系統逾時／5xx 皆不放行，且登入頁顯示對應提示（mock server 測試）
+- [ ] 緊急備援密碼：未設定時無法使用；設定後可登入並寫稽核
+- [ ] 登入速率限制測試（第 6 次回 429）；log 與稽核紀錄中沒有密碼
 - [ ] 審核頁可以篩選、批次通過或退件，退件後該使用者的券數立即重新計算
 - [ ] 修改 `ticket.mode` 後，儀表板和使用者「進度」的券數跟著改變
-- [ ] Playwright E2E：登入 → 建立景點 → 建立獎品 → 審核照片，流程全綠
+- [ ] Playwright E2E（使用 `mock` 登入）：登入 → 建立景點 → 建立獎品 → 審核照片，流程全綠
 - [ ] 手機寬度（375px）下，審核頁仍然可以操作
-- [ ] Access JWT 驗證有單元測試（簽章錯誤、`aud` 不符、過期、缺 header 都拒絕；以測試金鑰簽發）
-- [ ] 稽核紀錄的操作者為 Access email
+- [ ] 稽核紀錄的操作者為登入的主管（員工編號 + 姓名）
 
 ## S7 抽獎與通知
 **內容**
@@ -143,16 +147,16 @@
 - `scripts/rich-menu.ts`：用 API 建立圖文選單（上傳打卡照、我的進度、活動說明），上傳圖片並設為預設選單；可以指定環境。
 - `deploy/`：`Dockerfile`（multi-stage、standalone）、`docker-compose.yml`（app、db、cloudflared、backup）、`.env.example`、每日備份腳本與還原演練。
 - GHCR 映像建置與推送的 GitHub Actions。
-- 部署文件（`docs/runbook.md`）：env 對照表（只寫鍵名）、Cloudflare Tunnel 與 Access 設定（Access 套用 `/admin*`、`/api/admin*`；webhook、health、cron 路徑不套用；含 email 清單與 24 小時 session）、staging / production 兩套 compose、LINE Console 設定步驟、更新與回滾、活動當天檢查表（UPS、網路、備份）、故障應變（人工補登、重跑失敗事件）。
-- 容器內排程：補償掃描、員工名單同步、照片保存期滿後刪除。
+- 部署文件（`docs/runbook.md`）：env 對照表（只寫鍵名）、Cloudflare Tunnel 設定與 `/admin/login` 的 Rate limiting rule（Access 為選用，若啟用只套用 `/admin*`、`/api/admin*`，webhook、health、cron 路徑不套用）、請假系統 API 的 token 與連線設定、staging / production 兩套 compose、LINE Console 設定步驟、更新與回滾、活動當天檢查表（UPS、網路、備份）、故障應變（人工補登、重跑失敗事件）。
+- 容器內排程：補償掃描、照片保存期滿後刪除。
 - 壓力驗證：用 `fake-webhook.ts` 對 staging 模擬 40 人 × 10 張照片。
 
 **驗收條件**
 - [ ] `docker compose up` 後 app 可透過 Cloudflare Tunnel 的固定網域存取；重開機後自動恢復
 - [ ] 備份可成功還原（演練一次）
 - [ ] staging（測試 OA）與 production（正式 OA）都可以正常收發
-- [ ] 未登入存取 `https://lucky.<網域>/admin`、`/api/admin/photos/<id>` 會被導向 Access 登入；`/api/line/webhook` 不受影響（LINE Console 的 Verify 成功）
-- [ ] 非白名單 email 無法通過 Access；大螢幕裝置事先登入，彩排時 session 不會在抽獎中過期
+- [ ] 未登入存取 `https://lucky.<網域>/admin` 導向登入頁、`/api/admin/photos/<id>` 回 401；`/api/line/webhook` 不受影響（LINE Console 的 Verify 成功）
+- [ ] 以請假系統主管帳號可登入、非主管不可；大螢幕裝置事先登入，彩排時 session 不會在抽獎中過期
 - [ ] 壓力驗證：400 個 image 事件在 2 分鐘內送完，0 個失敗，submissions 筆數正確，沒有重複
 - [ ] runbook 中的活動當天檢查表經過一次完整彩排（含抽獎與通知）
 - [ ] 正式 OA 的 webhook「Verify」按鈕成功；自動回應訊息已關閉

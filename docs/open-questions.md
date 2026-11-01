@@ -19,11 +19,12 @@
 | # | 問題 | 預設做法 | 對應設定 |
 |---|---|---|---|
 | B1 ✅ | 眷屬或小孩能不能參加抽獎？ | **已決定（David）：只有員工，無眷屬** | — |
-| B2 ✅ | 員工如何驗證身分？ | **已決定（David）：只要員工編號，不做綁定碼**。向請假系統查證編號是否存在／在職；輕量防冒用＝一編號一 LINE 帳號、失敗鎖定、管理員可解除綁定、領獎核對員工證（architecture.md §7.3） | `registration.mode` |
+| B2 ✅ | 員工如何參加／驗證身分？ | **已決定（David，S0d）**：員工在 LINE 輸入「啟動指令＋員工編號」（預設 `參加 A1234`）；向請假系統查證編號有效即可。**不做冒用防護**（無失敗鎖定、無解除綁定流程），David 判斷不會有冒用問題。一編號一 LINE 帳號（DB 唯一）、停權時釋出編號、領獎核對員工證（architecture.md §7.3） | `registration.command` |
 | B3 ✅ | 是否需要匯入員工名單？ | **已決定：與 EUCAN 請假系統聯動，但只做「編號查證」，不同步名單**。請假系統 API 就緒前用員工編號 CSV 清單（單欄）作備援 | `employees.source` |
-| B5 🔴 | 請假系統能否提供 `GET /api/integrations/employees/{employeeNo}/status` → `{ "valid": bool }`（architecture.md §7.4）？時程？員工編號格式（長度、字元）為何？是否同意只回布林、不區分離職與不存在？ | 先用編號 CSV，API 就緒後切換 | `employees.source` |
+| B8 ✅ | 員工編號格式、同名同姓？ | **已決定（David，S0d）**：一律照請假系統實際資料，員工編號唯一，不另外處理同名同姓、不另訂格式 | — |
+| B5 🔴 | 請假系統能否提供 §7.4 的兩支 API：(1) `GET /api/integrations/employees/{employeeNo}/status` → `{ "valid": bool }`；(2) `POST /api/integrations/auth/verify`（帳密 → `{ ok, employeeNo, name, isManager }`）？時程？請假系統「主管」權限如何判定？登入帳號是員工編號還是 email？是否有 2FA／SSO 而不適用帳密轉送？是否同意查證只回布林、不區分離職與不存在？ | 先用編號 CSV＋`mock` 登入，API 就緒後切換 | `employees.source`、`ADMIN_AUTH_SOURCE` |
 | B7 🟡 | 查證回應是否可以多回「姓名」（方便得獎公布與現場核對）？不給也可以，後台用 LINE 暱稱 + 編號辨識 | 不回姓名（資料最小化） | — |
-| B6 🟡 | 員工被他人搶先綁定、或換手機時，由誰在後台「解除綁定」？領獎時是否同意現場核對員工證？ | HR／福委處理；領獎核對員工證 | — |
+| B6 🟡 | 領獎時是否同意現場核對員工證？（解除綁定流程已取消，S0d） | 領獎核對員工證 | — |
 | B4 🟡 | 封鎖 OA 的人要不要保留抽獎資格？ | 保留，但他收不到通知 | `ticket.keepOnUnfollow` |
 
 ## C. 抽獎與獎品
@@ -53,8 +54,9 @@
 |---|---|---|
 | E1 ✅ | 部署平台 | **已決定（David）：不用 Vercel，改家用伺服器 Docker + Cloudflare Tunnel**，網域在 Cloudflare（architecture.md §4） |
 | E2 🟡 | 家用伺服器的 UPS、備份硬碟、活動當天的網路備援（熱點）是否到位？由誰負責監看？ | David 負責；見 architecture.md §4.7 |
-| E3 🔴 | 子網域與 Cloudflare Access | **Access 已決定（David）：`/admin*`、`/api/admin*` 加 Cloudflare Access**，webhook 路徑不套用（architecture.md §4.4）。子網域待確認，預設 `lucky` / `lucky-staging` |
-| E7 🔴 | Access 允許登入的管理員 email 清單？（大螢幕用的裝置／帳號也要在內） | David + 指定福委／HR 的 email |
+| E3 🔴 | 子網域與 Cloudflare Access | **後台改用請假系統主管帳號登入（David，S0d），建議移除 Access（不列必要，可隨時在 Cloudflare 加回，不需改程式）**，理由見 architecture.md §4.4。請 David 確認是否採納此建議。子網域待確認，預設 `lucky` / `lucky-staging` |
+| E7 🟡 | 請假系統中的「主管」有幾位？是否全部都可以進後台（含抽獎、退件）？要不要加員工編號白名單？ | 所有主管皆可；不加白名單（`admin.allowedEmployeeNos` 為空）。稽核紀錄記錄操作者 |
+| E8 🟡 | 請假系統當機時是否需要緊急備援密碼（`ADMIN_PASSWORD_HASH`）？ | 建議設定一組、只給 David，平常不用 |
 | E4 🟡 | 照片保存多久？是否需要給員工的隱私告知文字？活動結束後要不要把照片打包給福委做回顧？ | 活動結束 30 天後刪除；提供 ZIP 匯出 |
 | E5 🔴 | 系統上線和彩排日期？建議 12 月中完成，12 月下旬用正式 OA 小範圍彩排 | 12/15 程式完成、12/22 彩排 |
-| E6 🟢 | 管理員名單和人數？共用一組密碼可以接受嗎？ | 共用密碼，稽核紀錄記錄操作者自填的名字 |
+| E6 ✅ | 管理員名單與驗證方式？ | **已決定（David，S0d）**：使用請假系統主管帳號，不另建帳號；稽核紀錄記錄操作者的員工編號與姓名 |
