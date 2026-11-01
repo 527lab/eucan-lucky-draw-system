@@ -1,3 +1,4 @@
+import { assignRoute, spotRoute } from "../../upload";
 import { sourceUserId, type HandlerContext, type LineEvent } from "./types";
 
 export type PostbackRoute = (
@@ -7,7 +8,10 @@ export type PostbackRoute = (
 ) => Promise<void>;
 
 /** postback data 形如 `<prefix>:<payload>`（例如 `spot:<spotId>`）；後續階段在此註冊路由。 */
-export const postbackRoutes: Record<string, PostbackRoute> = {};
+export const postbackRoutes: Record<string, PostbackRoute> = {
+  spot: spotRoute,
+  assign: assignRoute,
+};
 
 export function parsePostbackData(data: string): { prefix: string; payload: string } {
   const i = data.indexOf(":");

@@ -1,4 +1,5 @@
 import { getSettings } from "../../settings";
+import { handleCheckin, handleImage, handleProgress } from "../../upload";
 import {
   askForPhotoMessage,
   fallbackMessage,
@@ -38,10 +39,7 @@ export async function handleMessage(ctx: HandlerContext, event: LineEvent) {
   if (event.message.type !== "text") {
     // 其他類型（貼圖、影片、位置…）回覆請傳照片。
     if (event.message.type === "image") {
-      // 未通過查證者不能上傳、不建立 submission；圖片的下載與建檔屬 S4。
-      if (!isActive(await findParticipant(db, userId))) {
-        await client.replyMessage(replyToken, [notRegisteredMessage(settings)]);
-      }
+      await handleImage(ctx, event);
       return;
     }
     await client.replyMessage(replyToken, [askForPhotoMessage()]);
@@ -66,8 +64,8 @@ export async function handleMessage(ctx: HandlerContext, event: LineEvent) {
         await client.replyMessage(replyToken, [notRegisteredMessage(settings)]);
         return;
       }
-      // 景點選擇與進度查詢屬 S4/S5。
-      await client.replyMessage(replyToken, [notAvailableYetMessage()]);
+      if (text === KEYWORDS.checkin) await handleCheckin(ctx, event, settings);
+      else await handleProgress(ctx, event, participant.id, settings);
       return;
     }
   }

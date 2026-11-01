@@ -5,6 +5,7 @@ import { webhookEvents } from "../db/schema";
 import type { LineClient } from "./client";
 import { dispatchEvent, type LineEvent } from "./handlers";
 import { sourceUserId } from "./handlers/types";
+import { getStorage, type PhotoStorage } from "../storage";
 import { verifySignature } from "./signature";
 
 export type WebhookDeps = {
@@ -13,6 +14,7 @@ export type WebhookDeps = {
   channelSecret: string | undefined;
   /** 回應後執行的工作（route 傳入 next/server 的 after）。 */
   schedule: (task: () => Promise<void>) => void;
+  storage?: () => PhotoStorage;
   now?: () => Date;
 };
 
@@ -64,7 +66,10 @@ export async function processEvents(events: LineEvent[], deps: WebhookDeps) {
   for (const event of events) {
     const where = eq(webhookEvents.webhookEventId, event.webhookEventId);
     try {
-      await dispatchEvent({ db: deps.db, client: deps.client(), now }, event);
+      await dispatchEvent(
+        { db: deps.db, client: deps.client(), now, storage: deps.storage ?? getStorage },
+        event,
+      );
       await deps.db
         .update(webhookEvents)
         .set({ status: "processed", processedAt: now() })
