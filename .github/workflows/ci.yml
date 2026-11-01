@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      # ⚠️ 以下全部是 DUMMY 假值，僅供 build 通過驗證，不是真實金鑰。
+      APP_ENV: production
+      APP_BASE_URL: https://dummy.example.com
+      LINE_CHANNEL_SECRET: dummy-not-real
+      LINE_CHANNEL_ACCESS_TOKEN: dummy-not-real
+      DATABASE_URL: postgres://dummy:dummy@localhost:5432/dummy
+      PHOTO_STORAGE_DIR: /tmp/photos
+      SESSION_SECRET: dummy-not-real
+      CRON_SECRET: dummy-not-real
+      ADMIN_AUTH_SOURCE: leave-api
+      LEAVE_API_BASE_URL: https://dummy.example.com/leave
+      LEAVE_API_TOKEN: dummy-not-real
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
