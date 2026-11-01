@@ -59,22 +59,23 @@
 - [ ] 用測試 OA 實機（OA 申請暫緩，之前以 fake-webhook 驗證）：加好友收到歡迎訊息、完成報名、輸入「說明」收到說明文字
 - [ ] webhook 回應時間（不含 `after()`）在本機量測 < 300ms
 
-## S3b 員工名單同步與 LINE 綁定
-> 設計見 [architecture.md §7](./architecture.md#7-與請假系統的員工名單聯動)。請假系統 API 尚未定案，本階段只做介面、CSV 與 mock 轉接器。
+## S3b 員工編號查證與報名
+> 設計見 [architecture.md §7](./architecture.md#7-員工身分查證與請假系統聯動)。員工只輸入員工編號，不做綁定碼、不同步名單。請假系統 API 尚未定案，本階段先做介面、CSV 與 mock 轉接器。
 
 **內容**
-- `src/lib/employees/directory.ts`：`EmployeeDirectory` 介面與 `EmployeeRecord` 型別（zod 驗證）。
-- 轉接器：`csv`（後台上傳、欄位對應）、`mock`（測試）、`leave-api`（依 §7.4 規格實作，用 mock server 測試；請假系統就緒前預設不啟用）。
-- `sync`：upsert、停用在職狀態變動者、稽核紀錄（新增／更新／停用筆數）；後台「立即同步」按鈕與容器內排程。
-- 後台：員工名單頁、匯出一次性綁定碼 CSV（只存雜湊，匯出寫稽核）、解除綁定／重發碼、手動綁定。
-- `registration.mode = employee`：follow 後請輸入「員工編號 綁定碼」；constant-time 比對、一人一綁、失敗 5 次鎖 15 分鐘、未綁定者不能上傳也不進獎池。
+- `src/lib/employees/verifier.ts`：`EmployeeVerifier` 介面（`verify(employeeNo) → { valid }`）、編號正規化與格式檢查。
+- 轉接器：`csv`（後台上傳單欄編號清單→`employee_allowlist`）、`mock`（測試）、`leave-api`（依 [architecture.md §7.4](./architecture.md) 實作，3 秒逾時，用 mock server 測試；API 故障時**不得放行**；請假系統就緒前預設不啟用）。
+- `registration.mode = employee`：follow 後請輸入員工編號；`participants.employee_no` UNIQUE（一編號一 LINE 帳號）；失敗 `registration.maxFailures` 次鎖 `registration.lockMinutes` 分鐘；`employee_bind_attempts` 記錄（編號只存雜湊）；編號已被他人使用時回覆專用提示。未通過者不能上傳也不進獎池。
+- 後台：`/admin/employees`（`csv` 備援清單上傳）、參加者頁的「解除綁定」與「重複綁定嘗試」列表；中獎名單顯示員工編號以便現場核對。所有動作寫稽核。
 
 **驗收條件**
-- [ ] CSV 匯入與 mock 轉接器的同步有整合測試（新增、更新、離職停用）
-- [ ] 錯誤的編號或碼回覆相同的通用錯誤訊息；連續失敗 5 次後鎖定
-- [ ] 同一位員工不能被兩個 LINE 帳號綁定；同一個綁定碼不能使用兩次
-- [ ] 未綁定者傳照片會收到提示且不建立 submission
-- [ ] 匯出綁定碼與解除綁定都有稽核紀錄
+- [ ] `csv` 與 `mock` 轉接器的查證有單元／整合測試（有效、無效、離職、格式不合）
+- [ ] `leave-api` 轉接器在逾時、5xx、回應格式錯誤時都回「系統忙碌」且不放行（mock server 測試）
+- [ ] 無效編號回覆通用訊息；連續失敗 5 次後鎖定、鎖定期滿後可再試
+- [ ] 同一編號不能被兩個 LINE 帳號綁定（並發測試）；第二個帳號收到專用提示且留下 `already_bound` 紀錄
+- [ ] 管理員解除綁定後，該編號可由新的 LINE 帳號重新綁定；解除動作有稽核紀錄
+- [ ] 未通過查證者傳照片會收到提示且不建立 submission
+- [ ] 查證 API 的請求與 log 不含完整編號以外的個資，`employee_bind_attempts` 只存雜湊
 
 ## S4 照片上傳流程
 **內容**
@@ -106,6 +107,7 @@
 ## S6 管理後台
 **內容**
 - 登入、登出、session middleware，以及登入失敗速率限制。
+- `src/lib/auth/access-jwt.ts` 與 middleware：對 `/admin*`、`/api/admin*` 驗證 `Cf-Access-Jwt-Assertion`（`jose` + JWKS，檢查 `aud`、效期），production／staging 無效回 403；本機開發可用設定關閉；JWT 的 email 作為稽核 `actor`。
 - [spec.md §4.2](./spec.md#42-頁面) 中除了抽獎以外的所有頁面：儀表板（含 LINE 額度查詢）、景點、參加者、照片審核（批次操作）、獎品、設定、訊息範本、稽核紀錄。
 - `/api/admin/photos/[id]`：驗證 session 後串流 Blob 照片，回應帶 `Cache-Control: private`。
 - 手動新增 submission（給系統故障時人工補登使用）。
@@ -117,6 +119,8 @@
 - [ ] 修改 `ticket.mode` 後，儀表板和使用者「進度」的券數跟著改變
 - [ ] Playwright E2E：登入 → 建立景點 → 建立獎品 → 審核照片，流程全綠
 - [ ] 手機寬度（375px）下，審核頁仍然可以操作
+- [ ] Access JWT 驗證有單元測試（簽章錯誤、`aud` 不符、過期、缺 header 都拒絕；以測試金鑰簽發）
+- [ ] 稽核紀錄的操作者為 Access email
 
 ## S7 抽獎與通知
 **內容**
@@ -139,7 +143,7 @@
 - `scripts/rich-menu.ts`：用 API 建立圖文選單（上傳打卡照、我的進度、活動說明），上傳圖片並設為預設選單；可以指定環境。
 - `deploy/`：`Dockerfile`（multi-stage、standalone）、`docker-compose.yml`（app、db、cloudflared、backup）、`.env.example`、每日備份腳本與還原演練。
 - GHCR 映像建置與推送的 GitHub Actions。
-- 部署文件（`docs/runbook.md`）：env 對照表（只寫鍵名）、Cloudflare Tunnel 與 Access 設定（webhook 路徑排除）、staging / production 兩套 compose、LINE Console 設定步驟、更新與回滾、活動當天檢查表（UPS、網路、備份）、故障應變（人工補登、重跑失敗事件）。
+- 部署文件（`docs/runbook.md`）：env 對照表（只寫鍵名）、Cloudflare Tunnel 與 Access 設定（Access 套用 `/admin*`、`/api/admin*`；webhook、health、cron 路徑不套用；含 email 清單與 24 小時 session）、staging / production 兩套 compose、LINE Console 設定步驟、更新與回滾、活動當天檢查表（UPS、網路、備份）、故障應變（人工補登、重跑失敗事件）。
 - 容器內排程：補償掃描、員工名單同步、照片保存期滿後刪除。
 - 壓力驗證：用 `fake-webhook.ts` 對 staging 模擬 40 人 × 10 張照片。
 
@@ -147,6 +151,8 @@
 - [ ] `docker compose up` 後 app 可透過 Cloudflare Tunnel 的固定網域存取；重開機後自動恢復
 - [ ] 備份可成功還原（演練一次）
 - [ ] staging（測試 OA）與 production（正式 OA）都可以正常收發
+- [ ] 未登入存取 `https://lucky.<網域>/admin`、`/api/admin/photos/<id>` 會被導向 Access 登入；`/api/line/webhook` 不受影響（LINE Console 的 Verify 成功）
+- [ ] 非白名單 email 無法通過 Access；大螢幕裝置事先登入，彩排時 session 不會在抽獎中過期
 - [ ] 壓力驗證：400 個 image 事件在 2 分鐘內送完，0 個失敗，submissions 筆數正確，沒有重複
 - [ ] runbook 中的活動當天檢查表經過一次完整彩排（含抽獎與通知）
 - [ ] 正式 OA 的 webhook「Verify」按鈕成功；自動回應訊息已關閉

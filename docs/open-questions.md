@@ -19,10 +19,11 @@
 | # | 問題 | 預設做法 | 對應設定 |
 |---|---|---|---|
 | B1 ✅ | 眷屬或小孩能不能參加抽獎？ | **已決定（David）：只有員工，無眷屬** | — |
-| B2 🟡 | 員工如何驗證身分？ | `employee` 模式：員工編號 + 一次性綁定碼（architecture.md §7.3 方案 A）。請確認 HR 能發碼，或是否改走方案 B（請假系統登入後產生綁定碼） | `registration.mode` |
-| B3 ✅ | 是否需要匯入員工名單？ | **已決定：與 EUCAN 請假系統聯動**（員工帳號）。MVP 先用 CSV 匯入，請假系統提供 API 後改自動同步 | `employees.source` |
-| B5 🔴 | 請假系統（`eucan-leave-next`）能否提供 `GET /api/integrations/employees`（architecture.md §7.4）？時程？員工編號、在職狀態、是否參加旅遊有哪些欄位？ | 先用 CSV，API 就緒後切換 | `employees.source` |
-| B6 🟡 | 綁定碼由誰發、怎麼發（說明會當場、公司信箱、個別 LINE）？員工換手機怎麼處理？ | HR 發碼；換手機由管理員重發 | — |
+| B2 ✅ | 員工如何驗證身分？ | **已決定（David）：只要員工編號，不做綁定碼**。向請假系統查證編號是否存在／在職；輕量防冒用＝一編號一 LINE 帳號、失敗鎖定、管理員可解除綁定、領獎核對員工證（architecture.md §7.3） | `registration.mode` |
+| B3 ✅ | 是否需要匯入員工名單？ | **已決定：與 EUCAN 請假系統聯動，但只做「編號查證」，不同步名單**。請假系統 API 就緒前用員工編號 CSV 清單（單欄）作備援 | `employees.source` |
+| B5 🔴 | 請假系統能否提供 `GET /api/integrations/employees/{employeeNo}/status` → `{ "valid": bool }`（architecture.md §7.4）？時程？員工編號格式（長度、字元）為何？是否同意只回布林、不區分離職與不存在？ | 先用編號 CSV，API 就緒後切換 | `employees.source` |
+| B7 🟡 | 查證回應是否可以多回「姓名」（方便得獎公布與現場核對）？不給也可以，後台用 LINE 暱稱 + 編號辨識 | 不回姓名（資料最小化） | — |
+| B6 🟡 | 員工被他人搶先綁定、或換手機時，由誰在後台「解除綁定」？領獎時是否同意現場核對員工證？ | HR／福委處理；領獎核對員工證 | — |
 | B4 🟡 | 封鎖 OA 的人要不要保留抽獎資格？ | 保留，但他收不到通知 | `ticket.keepOnUnfollow` |
 
 ## C. 抽獎與獎品
@@ -52,7 +53,8 @@
 |---|---|---|
 | E1 ✅ | 部署平台 | **已決定（David）：不用 Vercel，改家用伺服器 Docker + Cloudflare Tunnel**，網域在 Cloudflare（architecture.md §4） |
 | E2 🟡 | 家用伺服器的 UPS、備份硬碟、活動當天的網路備援（熱點）是否到位？由誰負責監看？ | David 負責；見 architecture.md §4.7 |
-| E3 🔴 | 要用哪個子網域（例如 `lucky.<網域>`、`lucky-staging.<網域>`）？是否要對 `/admin` 加 Cloudflare Access？ | `lucky` / `lucky-staging`；加 Access（限 email） |
+| E3 🔴 | 子網域與 Cloudflare Access | **Access 已決定（David）：`/admin*`、`/api/admin*` 加 Cloudflare Access**，webhook 路徑不套用（architecture.md §4.4）。子網域待確認，預設 `lucky` / `lucky-staging` |
+| E7 🔴 | Access 允許登入的管理員 email 清單？（大螢幕用的裝置／帳號也要在內） | David + 指定福委／HR 的 email |
 | E4 🟡 | 照片保存多久？是否需要給員工的隱私告知文字？活動結束後要不要把照片打包給福委做回顧？ | 活動結束 30 天後刪除；提供 ZIP 匯出 |
 | E5 🔴 | 系統上線和彩排日期？建議 12 月中完成，12 月下旬用正式 OA 小範圍彩排 | 12/15 程式完成、12/22 彩排 |
 | E6 🟢 | 管理員名單和人數？共用一組密碼可以接受嗎？ | 共用密碼，稽核紀錄記錄操作者自填的名字 |

@@ -1,6 +1,6 @@
 # 功能規格（spec.md）
 
-> 版本：S0 草案（2026-11-01）
+> 版本：S0c（2026-11-01；員工身分改為「僅員工編號」查證、/admin 加 Cloudflare Access）
 > 活動：2027 年 1 月初公司員工旅遊，參與人數約 30–40 人
 > 相關文件：[architecture.md](./architecture.md)、[open-questions.md](./open-questions.md)、[tasks.md](./tasks.md)
 
@@ -30,8 +30,8 @@
 
 | 角色 | 說明 | 介面 |
 |---|---|---|
-| 參加者 | **僅公司員工**（無眷屬）；名單來自請假系統，LINE 帳號需綁定員工（見 architecture.md §7） | LINE 聊天室 |
-| 管理員 | David 和指定的福委或 HR | 網頁後台 `/admin` |
+| 參加者 | **僅公司員工**（無眷屬）；在 LINE 輸入員工編號，由請假系統查證是否有效（見 architecture.md §7） | LINE 聊天室 |
+| 管理員 | David 和指定的福委或 HR | 網頁後台 `/admin`（Cloudflare Access + 管理密碼，兩道門） |
 | 大螢幕 | 抽獎現場投影 | 網頁 `/admin/draw/live`（需要管理員登入） |
 
 ## 3. 參加者流程（LINE 端）
@@ -40,7 +40,7 @@
 1. 員工掃 QR code 加 OA 好友，觸發 `follow` 事件。
 2. 系統建立或恢復 `participants` 紀錄，並取得 LINE 顯示名稱和大頭貼（Get profile API）。
 3. 依 `registration.mode` 處理：
-   - `employee`（**預設**）：Bot 請使用者輸入「員工編號 + 一次性綁定碼」，與同步自請假系統的 `employees` 比對，成功就把這個 LINE 帳號綁定到該員工（一人一綁、失敗鎖定，細節見 architecture.md §7.3）。未綁定者不能上傳照片、不進獎池。
+   - `employee`（**預設**）：Bot 請使用者輸入「員工編號」，系統向請假系統查證該編號存在且在職（只回 是/否，不取其他資料），通過就把這個 LINE 帳號與該編號綁定。**同一編號只能對應一個 LINE 帳號**（先到先綁）、連續輸入錯誤會暫時鎖定，管理員可在後台解除綁定（細節見 architecture.md §7.3）。未通過者不能上傳照片、不進獎池。
    - `none`：直接可以參加，以 LINE 顯示名稱識別。
    - `name`（備援，名單不可用時）：Bot 請使用者回覆「真實姓名」，收到後完成報名。
    - `code`：Bot 請使用者輸入活動通關碼（`registration.joinCode`），通過後再輸入姓名。這可以防止外部人士加好友來參加。
@@ -104,6 +104,8 @@
 ### 4.1 登入
 - 採用單一共用管理密碼（環境變數 `ADMIN_PASSWORD_HASH`，存 bcrypt 或 argon2 雜湊）加上 httpOnly 簽章 cookie（`SESSION_SECRET`）。
 - 登入失敗做速率限制（同 IP 每分鐘 5 次）。
+- **第一道門：Cloudflare Access**。`/admin*` 與 `/api/admin*` 由 Cloudflare Access 保護（只允許管理員 email，一次性 PIN 或 Google 登入），通過後才碰得到登入頁；`/api/line/webhook` 與 `/api/health` 不套用。應用層另外驗證 Access 簽發的 `Cf-Access-Jwt-Assertion`（`CF_ACCESS_TEAM_DOMAIN`、`CF_ACCESS_AUD`），production 缺少或無效就回 403；Access 提供的 email 同時作為稽核紀錄的操作者名稱（取代自填名字）。細節見 architecture.md §4.4。
+- 大螢幕裝置第一次開 `/admin/draw/live` 時需先通過 Access 登入（session 時間設為 24 小時，避免抽獎當下過期）。
 - 理由：管理員只有 2–3 人，活動只用一次，不值得接 OAuth。之後如果要分帳號，再換成 LINE Login。
 
 ### 4.2 頁面
@@ -111,7 +113,8 @@
 |---|---|
 | 儀表板 `/admin` | 報名人數、各景點完成人數、待審照片數、本月 push 額度用量（呼叫 `GET /v2/bot/message/quota` 和 `/quota/consumption`）、抽獎狀態 |
 | 景點 `/admin/spots` | 新增、編輯、刪除、排序；欄位見資料模型；可以停用 |
-| 參加者 `/admin/participants` | 列表、搜尋、編輯姓名、停權、查看個人照片和抽獎券；手動加減券（需填寫原因） |
+| 參加者 `/admin/participants` | 列表（LINE 暱稱 + 員工編號）、搜尋、停權、**解除員工編號綁定**（換手機或被冒用時）、查看個人照片和抽獎券；手動加減券（需填寫原因）；可看「重複綁定嘗試」紀錄 |
+| 員工名單 `/admin/employees` | 僅在 `employees.source = csv` 時使用：上傳／覆蓋員工編號清單（只有編號一欄，作為請假系統 API 不可用時的備援）；`leave-api` 模式下顯示最近一次查證連線狀態 |
 | 照片審核 `/admin/submissions` | 縮圖格狀檢視，可依景點或狀態篩選；可單張或批次通過、退件（需填寫退件原因）；退件時是否 push 通知由 `notify.onReject` 決定（預設 `false`，節省額度） |
 | 獎品 `/admin/prizes` | 新增、編輯、刪除；欄位包括名稱、數量、圖片、抽出順序 |
 | 抽獎 `/admin/draw` | 預覽獎池（每人券數、中獎機率）→ 鎖定 → 開抽 → 結果 → 重抽單一名額 → 發送通知 → 匯出 CSV |
@@ -160,10 +163,11 @@
 participants
   id                uuid PK
   line_user_id      text UNIQUE NOT NULL     -- 依 provider 而不同的 LINE userId
-  employee_id       uuid UNIQUE NULL FK → employees   -- 綁定的員工（registration.mode=employee）
+  employee_no       text UNIQUE NULL         -- 通過查證的員工編號（registration.mode=employee）；一個編號只能綁一個 LINE 帳號
+  employee_verified_at timestamptz NULL
   display_name      text                     -- LINE 顯示名稱
   picture_url       text
-  real_name         text                     -- 由 employees.name 帶入（備援模式則為報名時輸入）
+  real_name         text                     -- 僅 name/code 備援模式報名時輸入；employee 模式不取得姓名，後台以 LINE 暱稱 + 員工編號辨識
   status            enum(pending_registration, active, blocked, unfollowed)
   registered_at     timestamptz
   followed_at       timestamptz
@@ -199,29 +203,20 @@ submissions
   created_at        timestamptz             -- 以 LINE webhook 的 timestamp 為準
   INDEX (participant_id, spot_id, status)
 
-employees                                  -- 自請假系統同步的唯讀副本（architecture.md §7）
-  id                uuid PK
-  external_id       text UNIQUE NOT NULL
-  employee_no       text UNIQUE
-  name              text NOT NULL
-  department        text
-  email             text
-  active            boolean
-  trip_eligible     boolean DEFAULT true
-  source            text
-  synced_at         timestamptz
+employee_allowlist                         -- 僅 employees.source=csv 時使用（備援）；只存編號
+  employee_no       text PK
+  imported_at       timestamptz
 
-employee_bind_codes
+employee_bind_attempts                     -- 失敗鎖定與冒用稽核
   id                uuid PK
-  employee_id       uuid FK → employees
-  code_hash         text NOT NULL
-  expires_at        timestamptz
-  used_at           timestamptz NULL
-  used_by_participant_id uuid NULL
+  line_user_id      text
+  employee_no_hash  text                     -- 嘗試的編號（雜湊，避免留存大量輸入）
+  result            enum(ok, invalid, already_bound, locked)
+  created_at        timestamptz
 
 conversation_states
   participant_id    uuid PK FK
-  state             enum(awaiting_photo, awaiting_name, awaiting_join_code)
+  state             enum(awaiting_photo, awaiting_employee_no, awaiting_name, awaiting_join_code)
   spot_id           uuid NULL
   image_set_id      text NULL
   expires_at        timestamptz
@@ -315,7 +310,8 @@ admin_audit_logs
 | `DATABASE_URL` | Postgres 連線字串（compose 內部網路） |
 | `PHOTO_STORAGE_DIR` | 照片 volume 掛載路徑（例如 `/data/photos`） |
 | `TUNNEL_TOKEN` | Cloudflare Tunnel token（給 `cloudflared` 容器，不進 app） |
-| `LEAVE_API_BASE_URL` / `LEAVE_API_TOKEN` | 請假系統整合 API（選用，`employees.source=leave-api` 時需要） |
+| `LEAVE_API_BASE_URL` / `LEAVE_API_TOKEN` | 請假系統「員工編號查證」API（`employees.source=leave-api` 時需要） |
+| `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | 驗證 Cloudflare Access JWT（production、staging 必填；本機開發可留空並關閉檢查） |
 | `ADMIN_PASSWORD_HASH` | 管理密碼雜湊 |
 | `SESSION_SECRET` | cookie 簽章 |
 | `CRON_SECRET` | 保護排程端點 |
@@ -328,8 +324,8 @@ admin_audit_logs
 | `event.name` | string | `"EUCAN 2027 員工旅遊"` | 顯示用 |
 | `event.timezone` | string | `"Asia/Taipei"` | |
 | `registration.mode` | `employee`\|`name`\|`code`\|`none` | `employee` | 3.1；`employee` 需有員工名單 |
-| `employees.source` | `csv`\|`leave-api` | `csv` | 員工名單來源（architecture.md §7） |
-| `employees.syncCron` | string\|null | `0 3 * * *` | 名單自動同步排程 |
+| `employees.source` | `csv`\|`leave-api` | `csv` | 員工編號查證來源；請假系統 API 就緒後改 `leave-api`（architecture.md §7） |
+| `registration.maxFailures` / `registration.lockMinutes` | int | 5 / 15 | 編號輸入錯誤鎖定 |
 | `registration.joinCode` | string\|null | null | `code` 模式使用 |
 | `upload.startAt` | datetime\|null | null | 早於這個時間的照片不收 |
 | `upload.deadlineAt` | datetime\|null | null | 截止時間 |
@@ -358,7 +354,7 @@ admin_audit_logs
 | 負載 | 40 人 × 每人約 10 張照片；尖峰估計每秒 < 10 個 webhook。系統要承受 10 倍餘裕 |
 | Webhook 回應 | 驗簽、寫入事件、回 200 要在 1 秒內完成。下載照片和回覆訊息在回應後背景執行（`after()`） |
 | 冪等 | `webhookEventId` 和 `line_message_id` 唯一鍵；重送的事件（`deliveryContext.isRedelivery`）不重複處理 |
-| 安全 | 一律驗證 `x-line-signature`（HMAC-SHA256、channel secret、原始 body）；後台全部需要登入；照片不公開，透過後台受保護的路由讀取 |
+| 安全 | 一律驗證 `x-line-signature`（HMAC-SHA256、channel secret、原始 body）；後台全部需要 Cloudflare Access + 登入；照片不公開，透過後台受保護的路由讀取 |
 | 隱私 | 照片和姓名只在活動期間使用。活動結束 30 天後，由管理員按鈕或排程刪除照片（`privacy.purgeAfterDays`，預設 30） |
 | 可觀測性 | 結構化 log（含 `webhookEventId`）；後台可以查失敗的 webhook 和 push |
 | 可用性 | 活動當天如果系統掛掉，照片仍然留在 LINE 聊天室，可以人工補登。後台提供「手動新增 submission」 |
