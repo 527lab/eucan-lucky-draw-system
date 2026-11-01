@@ -36,8 +36,14 @@ export async function handleMessage(ctx: HandlerContext, event: LineEvent) {
   const settings = await getSettings(db);
 
   if (event.message.type !== "text") {
-    // 圖片的下載與建檔屬 S5；其他類型（貼圖、影片、位置…）回覆請傳照片。
-    if (event.message.type === "image") return;
+    // 其他類型（貼圖、影片、位置…）回覆請傳照片。
+    if (event.message.type === "image") {
+      // 未通過查證者不能上傳、不建立 submission；圖片的下載與建檔屬 S4。
+      if (!isActive(await findParticipant(db, userId))) {
+        await client.replyMessage(replyToken, [notRegisteredMessage(settings)]);
+      }
+      return;
+    }
     await client.replyMessage(replyToken, [askForPhotoMessage()]);
     return;
   }
