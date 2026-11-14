@@ -11,6 +11,7 @@ export default defineConfig({
     // 全部是假值：mock 登入、假 session 密鑰，不連 LINE 與真實請假系統。
     env: {
       APP_ENV: "test",
+      ADMIN_FIXTURES: "1", // 記憶體 PGlite 載入虛構展示資料
       ADMIN_AUTH_SOURCE: "mock",
       SESSION_SECRET: "e2e-fake-session-secret",
     },

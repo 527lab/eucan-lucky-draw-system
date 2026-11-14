@@ -69,7 +69,13 @@ let shared: Promise<DbHandle> | undefined;
 /** 應用程式共用連線（快取）。記憶體內 PGlite（僅 test）會自動執行 migration。 */
 export function getDb(): Promise<Db> {
   shared ??= createDb().then(async (h) => {
-    if (h.driver === "pglite") await runMigrations(h);
+    if (h.driver === "pglite") {
+      await runMigrations(h);
+      if (process.env.APP_ENV === "test" && process.env.ADMIN_FIXTURES === "1") {
+        const { seedFixtures } = await import("./fixtures");
+        await seedFixtures(h.db);
+      }
+    }
     return h;
   });
   return shared.then((h) => h.db);
